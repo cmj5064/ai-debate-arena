@@ -398,14 +398,21 @@ def pro_agent(state: DebateState) -> DebateState:
     messages.append(HumanMessage(content=prompt))
     # response = llm.invoke(messages)
     # 실시간 스트리밍
-    response_placeholder = st.empty()
-    collected_chunks = []
-    
-    # 스트리밍 응답 처리
-    for chunk in llm.stream(messages):
-        if chunk.content:
-            collected_chunks.append(chunk.content) 
-            response_placeholder.markdown(f"**찬성 측 의견 작성 중...**\n\n{''.join(collected_chunks)}")
+    # 스트리밍을 위한 컨테이너 생성
+    with st.container(border=True):
+        st.markdown("**🔵 찬성 측 의견 작성 중...**")
+        response_placeholder = st.empty()
+        collected_chunks = []
+        
+        # 스트리밍 응답 처리
+        for chunk in llm.stream(messages):
+            if chunk.content:
+                collected_chunks.append(chunk.content)
+                # 마크다운 서식을 적용하여 텍스트 표시
+                formatted_text = f"""
+                {' '.join(collected_chunks)}
+                """
+                response_placeholder.markdown(formatted_text)
     
     full_response = ''.join(collected_chunks)
 
@@ -459,14 +466,21 @@ def con_agent(state: DebateState) -> DebateState:
     messages.append(HumanMessage(content=prompt))
     # response = llm.invoke(messages)
     # 실시간 스트리밍
-    response_placeholder = st.empty()
-    collected_chunks = []
-    
-    # 스트리밍 응답 처리
-    for chunk in llm.stream(messages):
-        if chunk.content:
-            collected_chunks.append(chunk.content)
-            response_placeholder.markdown(f"**반대 측 의견 작성 중...**\n\n{''.join(collected_chunks)}")
+    # 스트리밍을 위한 컨테이너 생성
+    with st.container(border=True):
+        st.markdown("**🔴 반대 측 의견 작성 중...**")
+        response_placeholder = st.empty()
+        collected_chunks = []
+        
+        # 스트리밍 응답 처리
+        for chunk in llm.stream(messages):
+            if chunk.content:
+                collected_chunks.append(chunk.content)
+                # 마크다운 서식을 적용하여 텍스트 표시
+                formatted_text = f"""
+                {' '.join(collected_chunks)}
+                """
+                response_placeholder.markdown(formatted_text)
     
     full_response = ''.join(collected_chunks)
 
@@ -524,15 +538,22 @@ def judge_agent(state: DebateState) -> DebateState:
     messages.append(HumanMessage(content=prompt))
     # response = llm.invoke(messages)
     # 실시간 스트리밍
-    response_placeholder = st.empty()
-    collected_chunks = []
+    # 스트리밍을 위한 컨테이너 생성
+    with st.container(border=True):
+        st.markdown("**🧑‍⚖️ 최종 평가 작성 중...**")
+        response_placeholder = st.empty()
+        collected_chunks = []
+        
+        # 스트리밍 응답 처리
+        for chunk in llm.stream(messages):
+            if chunk.content:
+                collected_chunks.append(chunk.content)
+                # 마크다운 서식을 적용하여 텍스트 표시
+                formatted_text = f"""
+                {' '.join(collected_chunks)}
+                """
+                response_placeholder.markdown(formatted_text)
     
-    # 스트리밍 응답 처리
-    for chunk in llm.stream(messages):
-        if chunk.content:
-            collected_chunks.append(chunk.content)
-            response_placeholder.markdown(f"**심판 평가 작성 중...**\n\n{''.join(collected_chunks)}")
-            
     full_response = ''.join(collected_chunks)
 
     # 상태 업데이트
