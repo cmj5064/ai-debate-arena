@@ -102,7 +102,7 @@ def pro_agent(state: DebateState) -> DebateState:
     response = llm.invoke(messages)
 
     # 상태 업데이트
-    new_state = # todo: new_state 셋팅
+    new_state = state.copy()
     new_state["messages"].append({"role": "찬성 측", "content": response.content})
     new_state["current_speaker"] = SpeakerRole.CON
     return new_state
@@ -142,7 +142,7 @@ def con_agent(state: DebateState) -> DebateState:
     response = llm.invoke(messages)
 
     # 상태 업데이트
-    new_state = # todo: new_state 셋팅
+    new_state = state.copy()
     new_state["messages"].append({"role": "반대 측", "content": response.content})
     new_state["current_round"] += 1
 
@@ -187,7 +187,7 @@ def judge_agent(state: DebateState) -> DebateState:
     response = llm.invoke(messages)
 
     # 상태 업데이트
-    new_state = # todo: new_state 셋팅
+    new_state = state.copy()
     new_state["messages"].append({"role": "심판", "content": response.content})
     new_state["debate_status"] = DebateStatus.COMPLETED
     new_state["current_speaker"] = SpeakerRole.COMPLETED
@@ -206,13 +206,17 @@ def create_debate_graph() -> StateGraph:
     # 그래프 생성
     workflow = StateGraph(DebateState)
 
-    # todo: 노드 추가
-    # workflow ...
+    # 노드 추가
+    workflow.add_node(SpeakerRole.PRO.value, pro_agent)
+    workflow.add_node(SpeakerRole.CON.value, con_agent)
+    workflow.add_node(SpeakerRole.JUDGE.value, judge_agent)
 
-    # todo: routing_map 정의
-    # routing_map = {
-    #    ...
-    # }
+    routing_map = {
+        SpeakerRole.PRO.value: SpeakerRole.PRO.value,
+        SpeakerRole.CON.value: SpeakerRole.CON.value,
+        SpeakerRole.JUDGE.value: SpeakerRole.JUDGE.value,
+        "END": END,
+    }
 
     # 엣지 정의
     workflow.add_conditional_edges(
@@ -233,10 +237,11 @@ def create_debate_graph() -> StateGraph:
         routing_map,
     )
 
-    # todo: 시작 노드 설정
+    # 시작 노드 설정
+    workflow.set_entry_point(SpeakerRole.PRO.value)
 
-    # todo: 그래프 컴파일
-    # ...
+    # 그래프 컴파일
+    return workflow.compile()
 
 
 # Streamlit 애플리케이션 로직
