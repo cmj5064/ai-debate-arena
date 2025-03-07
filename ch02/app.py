@@ -72,7 +72,7 @@ debate_topic = st.text_input(
     "토론 주제를 입력하세요:", "인공지능이 인간의 일자리를 대체해야 한다"
 )
 
-max_rounds = st.slider("토론 라운드 수", min_value=1, max_value=5, value=1)
+max_rounds = st.slider("토론 라운드 수", min_value=1, max_value=5, value=3)
 st.session_state.max_rounds = max_rounds
 
 # 토론 시작 버튼
@@ -123,29 +123,17 @@ def handle_pro_round():
 
 
 def handle_con_round():
-    # TODO: 반대 측 의견 생성
     with st.spinner("반대 측 의견을 생성 중입니다..."):
+        previous_argument = st.session_state.debate_history[-1]["content"]
+        con_prompt = f"""
+        당신은 '{debate_topic}'에 대해 반대 입장을 가진 토론자입니다.
+        찬성 측의 다음 주장에 대해 반박하고, 반대 입장을 제시해주세요:
 
-        if st.session_state.round == 1:
-            # 첫 번째 찬성 측 의견 생성
-            con_prompt = f"""
-            당신은 '{debate_topic}'에 대해 반대 입장을 가진 토론자입니다.
-            논리적이고 설득력 있는 반대 측 주장을 제시해주세요.
-            200자 내로 작성해주세요.
-            """
-            system_prompt = "당신은 논리적이고 설득력 있는 반대 측 토론자입니다."
-        else:
-            # 이전 반대 측 의견에 대한 반박
-            previous_argument = st.session_state.debate_history[-1]["content"]
-            con_prompt = f"""
-            당신은 '{debate_topic}'에 대해 반대 입장을 가진 토론자입니다.
-            찬성 측의 다음 주장에 대해 반박하고, 반대 입장을 더 강화해주세요:
+        찬성 측 주장: "{previous_argument}"
 
-            찬성 측 주장: "{previous_argument}"
-
-            200자 내로 작성해주세요.
-            """
-            system_prompt = "당신은 논리적이고 설득력 있는 반대 측 토론자입니다. 찬성 측 주장에 대해 적극적으로 반박하세요."
+        200자 내로 작성해주세요.
+        """
+        system_prompt = "당신은 논리적이고 설득력 있는 반대 측 토론자입니다. 찬성 측 주장에 대해 적극적으로 반박하세요."
 
         con_argument = generate_response(
             con_prompt, system_prompt, st.session_state.debate_history
