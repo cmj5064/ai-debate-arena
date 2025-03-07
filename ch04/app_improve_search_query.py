@@ -45,68 +45,121 @@ embeddings = AzureOpenAIEmbeddings(
 )
 
 
+# 검색 질의어 개선 함수
+def improve_search_query(topic, search_type="general", language="en"):
+    """
+    LLM을 사용하여 검색 질의어를 개선합니다.
+
+    Args:
+        topic: 원래 토론 주제
+        search_type: "pro" (찬성), "con" (반대), "general" (일반) 중 하나
+        language: 검색 언어 ("en" 또는 "ko")
+
+    Returns:
+        개선된 검색 질의어 목록
+    """
+    prompt_by_type = {
+        "pro": f"'{topic}'에 대해 찬성하는 입장을 뒷받침할 수 있는 사실과 정보를 찾고자 합니다. 위키피디아 검색에 적합한 3개의 검색어를 제안해주세요. 각 검색어는 25자 이내로 작성하고 콤마로 구분하세요. 검색어만 제공하고 설명은 하지 마세요.",
+        "con": f"'{topic}'에 대해 반대하는 입장을 뒷받침할 수 있는 사실과 정보를 찾고자 합니다. 위키피디아 검색에 적합한 3개의 검색어를 제안해주세요. 각 검색어는 25자 이내로 작성하고 콤마로 구분하세요. 검색어만 제공하고 설명은 하지 마세요.",
+        "general": f"'{topic}'에 대한 객관적인 사실과 정보를 찾고자 합니다. 위키피디아 검색에 적합한 3개의 검색어를 제안해주세요. 각 검색어는 25자 이내로 작성하고 콤마로 구분하세요. 검색어만 제공하고 설명은 하지 마세요.",
+    }
+
+    messages = [
+        SystemMessage(
+            content="당신은 검색 전문가입니다. 주어진 주제에 대해 가장 관련성 높은 검색어를 제안해주세요."
+        ),
+        HumanMessage(content=prompt_by_type[search_type]),
+    ]
+
+    try:
+        # 낮은 온도로 설정하여 일관된 결과 유도
+        response = llm.invoke(messages)
+        # 콤마로 구분된 검색어 분리
+        suggested_queries = [q.strip() for q in response.content.split(",")]
+        # 최대 3개 검색어만 사용
+        return suggested_queries[:3]
+    except Exception as e:
+        st.warning(f"검색어 개선 중 오류 발생: {str(e)}")
+        # 기본 검색어 반환
+        if search_type == "pro":
+            return [f"{topic} advantages", f"{topic} benefits", f"{topic} support"]
+        elif search_type == "con":
+            return [f"{topic} disadvantages", f"{topic} problems", f"{topic} against"]
+        else:
+            return [topic]
+
+
 # 위키피디아 데이터 수집 함수
-def get_wikipedia_content(topic, language="en"):
+def get_wikipedia_content(topic, language="en", search_type="general"):
+    st.divider()
     try:
         # 언어 설정
         wikipedia.set_lang(language)
 
-        # 검색 결과 가져오기 (먼저 관련 페이지 찾기)
-        search_results = wikipedia.search(topic, results=5)
-
-        if not search_results:
-            st.warning(f"{topic}에 대한 위키피디아 페이지를 찾을 수 없습니다.")
-            return []
-
-        # 디버깅용 메시지
-        st.info(f"'{topic}'에 대한 검색 결과: {', '.join(search_results[:3])}...")
+        # LLM을 사용하여 검색어 개선
+        improved_queries = improve_search_query(topic, search_type, language)
+        st.info(f"개선된 검색어: {', '.join(improved_queries)}")
 
         documents = []
 
-        # 최대 3개의 가장 관련성 높은 페이지 처리
-        for i, page_title in enumerate(search_results[:3]):
-            try:
-                # 페이지 정보 가져오기
-                page = wikipedia.page(page_title, auto_suggest=False)
+        # 각 개선된 검색어에 대해 검색 수행
+        for query in improved_queries:
+            # 검색 결과 가져오기
+            search_results = wikipedia.search(query, results=3)
 
-                # 요약 추가
-                if page.summary:
-                    documents.append(
-                        Document(
-                            page_content=page.summary,
-                            metadata={
-                                "source": f"wikipedia-{language}",
-                                "section": "summary",
-                                "topic": page_title,
-                            },
-                        )
-                    )
-
-                # 본문 섹션 추가 (일부만)
-                content = page.content
-                if content:
-                    # 본문을 적당한 길이로 잘라서 추가
-                    max_length = 5000  # 최대 길이 제한
-                    if len(content) > max_length:
-                        content = content[:max_length]
-
-                    documents.append(
-                        Document(
-                            page_content=content,
-                            metadata={
-                                "source": f"wikipedia-{language}",
-                                "section": "content",
-                                "topic": page_title,
-                            },
-                        )
-                    )
-            except (
-                wikipedia.exceptions.DisambiguationError,
-                wikipedia.exceptions.PageError,
-            ) as e:
-                # 단일 페이지를 가져오는 데 실패해도 계속 진행
-                st.warning(f"{page_title} 페이지 처리 중 오류 발생: {str(e)}")
+            if not search_results:
                 continue
+
+            # 최대 2개의 관련성 높은 페이지만 처리 (쿼리당)
+            for page_title in search_results[:2]:
+                try:
+                    # 페이지 정보 가져오기
+                    page = wikipedia.page(page_title, auto_suggest=False)
+
+                    # 이미 수집한 페이지인지 확인
+                    if any(
+                        doc.metadata.get("topic") == page_title for doc in documents
+                    ):
+                        continue
+
+                    # 요약 추가
+                    if page.summary:
+                        documents.append(
+                            Document(
+                                page_content=page.summary,
+                                metadata={
+                                    "source": f"wikipedia-{language}",
+                                    "section": "summary",
+                                    "topic": page_title,
+                                    "query": query,
+                                },
+                            )
+                        )
+
+                    # 본문 섹션 추가 (일부만)
+                    content = page.content
+                    if content:
+                        # 본문을 적당한 길이로 자르기
+                        max_length = 5000
+                        if len(content) > max_length:
+                            content = content[:max_length]
+
+                        documents.append(
+                            Document(
+                                page_content=content,
+                                metadata={
+                                    "source": f"wikipedia-{language}",
+                                    "section": "content",
+                                    "topic": page_title,
+                                    "query": query,
+                                },
+                            )
+                        )
+                except (
+                    wikipedia.exceptions.DisambiguationError,
+                    wikipedia.exceptions.PageError,
+                ) as e:
+                    continue
 
         if documents:
             st.success(f"{language} 언어로 {len(documents)}개의 문서를 찾았습니다.")
@@ -233,10 +286,17 @@ def pro_agent(state: DebateState) -> DebateState:
             query += f" {last_con}에 대한 반박"
 
     context, docs = "", []
-    # if "vector_store" in state and state["vector_store"]:
-    vector_store = state.get("vector_store")
-    if vector_store:
-        context, docs = retrieve_relevant_info(query, state["vector_store"])
+    if "vector_store" in state and state["vector_store"]:
+        # 반대 측 주장이 있으면 참고하여 검색어 개선
+        # prev_con_content = ""
+        # if state["current_round"] > 1:
+        #     prev_con_arguments = [m for m in state["messages"] if m["role"] == "반대 측"]
+        #     if prev_con_arguments:
+        #         prev_con_content = prev_con_arguments[-1]["content"]
+
+        # improved_query = f"{state['topic']} - 찬성 측 관점" + (f" - 반박: {prev_con_content}" if prev_con_content else "")
+        improved_query = f"{state['topic']} - 찬성 측 관점"
+        context, docs = retrieve_relevant_info(improved_query, state["vector_store"])
 
     # 프롬프트 구성
     if state["current_round"] == 1:
@@ -316,9 +376,11 @@ def con_agent(state: DebateState) -> DebateState:
             last_pro = pro_arguments[-1]["content"]
             query += f" {last_pro}에 대한 반박"
 
-    context, docs = "", []
-    if "vector_store" in state and state["vector_store"]:
-        context, docs = retrieve_relevant_info(query, state["vector_store"])
+    # context, docs = "", []
+    # if "vector_store" in state and state["vector_store"]:
+    #     context, docs = retrieve_relevant_info(query, state["vector_store"])
+    improved_query = f"{state['topic']} - 반대 측 관점"
+    context, docs = retrieve_relevant_info(improved_query, state["vector_store"])
 
     # 프롬프트 구성
     # 찬성 측 마지막 메시지를 가져옴
