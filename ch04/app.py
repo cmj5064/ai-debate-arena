@@ -52,7 +52,8 @@ def get_wikipedia_content(topic, language="en"):
         wikipedia.set_lang(language)
 
         # 검색 결과 가져오기 (먼저 관련 페이지 찾기)
-        search_results = # TODO> wikipedia search
+        # search_results = # TODO> wikipedia search
+        search_results = wikipedia.search(topic)
 
         if not search_results:
             st.warning(f"{topic}에 대한 위키피디아 페이지를 찾을 수 없습니다.")
@@ -120,17 +121,22 @@ def get_wikipedia_content(topic, language="en"):
 
 # Vector Store 생성 함수
 # TODO: cache
+@st.cache_resource
 def create_vector_store(topic):
     documents = []
 
     # 영어 위키피디아 데이터 수집
     wiki_docs_en = get_wikipedia_content(topic, "en")
     # TODO: wiki_docs_en가 None이 아니면 documents에 추가
+    if wiki_docs_en:
+        documents.extend(wiki_docs_en)
     
 
     # 한국어 위키피디아 데이터 수집
     wiki_docs_ko = get_wikipedia_content(topic, "ko")
     # TODO: wiki_docs_en가 None이 아니면 documents에 추가
+    if wiki_docs_ko:
+        documents.extend(wiki_docs_ko)
 
     # 토픽이 영어가 아닌 경우 영어로도 검색 시도
     if not any(c.isascii() for c in topic):
@@ -162,6 +168,7 @@ def retrieve_relevant_info(query, vector_store, k=3):
 
     try:
         # TODO: 질의에 관련된 문서 검색
+        retrieved_docs = vector_store.similarity_search(query, k=k)
 
         # 검색 결과 텍스트 형식으로 변환
         context = ""
@@ -415,7 +422,10 @@ def judge_agent(state: DebateState) -> DebateState:
 
 
 # TODO: 라우터 함수 작성
-def router(state: DebateState) -> 
+def router(state: DebateState) -> Literal["pro_agent", "con_agent", "심판", "END"]:
+    if state["debate_status"] == DebateStatus.COMPLETED:
+        return "END"
+    return state["current_speaker"].value
 
 # LangGraph 워크플로우 정의
 def create_debate_graph() -> StateGraph:

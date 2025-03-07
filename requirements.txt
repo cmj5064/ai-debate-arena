@@ -3,3 +3,6 @@ langchain-openai
 langchain
 dotenv
 langgraph
+langchain-community
+wikipedia
+faiss-cpu
