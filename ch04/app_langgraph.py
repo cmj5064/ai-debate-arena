@@ -45,68 +45,121 @@ embeddings = AzureOpenAIEmbeddings(
 )
 
 
+# 검색 질의어 개선 함수
+def improve_search_query(topic, search_type="general", language="en"):
+    """
+    LLM을 사용하여 검색 질의어를 개선합니다.
+
+    Args:
+        topic: 원래 토론 주제
+        search_type: "pro" (찬성), "con" (반대), "general" (일반) 중 하나
+        language: 검색 언어 ("en" 또는 "ko")
+
+    Returns:
+        개선된 검색 질의어 목록
+    """
+    prompt_by_type = {
+        "pro": f"'{topic}'에 대해 찬성하는 입장을 뒷받침할 수 있는 사실과 정보를 찾고자 합니다. 위키피디아 검색에 적합한 3개의 검색어를 제안해주세요. 각 검색어는 25자 이내로 작성하고 콤마로 구분하세요. 검색어만 제공하고 설명은 하지 마세요.",
+        "con": f"'{topic}'에 대해 반대하는 입장을 뒷받침할 수 있는 사실과 정보를 찾고자 합니다. 위키피디아 검색에 적합한 3개의 검색어를 제안해주세요. 각 검색어는 25자 이내로 작성하고 콤마로 구분하세요. 검색어만 제공하고 설명은 하지 마세요.",
+        "general": f"'{topic}'에 대한 객관적인 사실과 정보를 찾고자 합니다. 위키피디아 검색에 적합한 3개의 검색어를 제안해주세요. 각 검색어는 25자 이내로 작성하고 콤마로 구분하세요. 검색어만 제공하고 설명은 하지 마세요.",
+    }
+
+    messages = [
+        SystemMessage(
+            content="당신은 검색 전문가입니다. 주어진 주제에 대해 가장 관련성 높은 검색어를 제안해주세요."
+        ),
+        HumanMessage(content=prompt_by_type[search_type]),
+    ]
+
+    try:
+        # 낮은 온도로 설정하여 일관된 결과 유도
+        response = llm.invoke(messages)
+        # 콤마로 구분된 검색어 분리
+        suggested_queries = [q.strip() for q in response.content.split(",")]
+        # 최대 3개 검색어만 사용
+        return suggested_queries[:3]
+    except Exception as e:
+        st.warning(f"검색어 개선 중 오류 발생: {str(e)}")
+        # 기본 검색어 반환
+        if search_type == "pro":
+            return [f"{topic} advantages", f"{topic} benefits", f"{topic} support"]
+        elif search_type == "con":
+            return [f"{topic} disadvantages", f"{topic} problems", f"{topic} against"]
+        else:
+            return [topic]
+
+
 # 위키피디아 데이터 수집 함수
-def get_wikipedia_content(topic, language="en"):
+def get_wikipedia_content(topic, language="en", search_type="general"):
+    st.divider()
     try:
         # 언어 설정
         wikipedia.set_lang(language)
 
-        # 검색 결과 가져오기 (먼저 관련 페이지 찾기)
-        search_results = wikipedia.search(topic, results=5)
-
-        if not search_results:
-            st.warning(f"{topic}에 대한 위키피디아 페이지를 찾을 수 없습니다.")
-            return []
-
-        # 디버깅용 메시지
-        st.info(f"'{topic}'에 대한 검색 결과: {', '.join(search_results[:3])}...")
+        # LLM을 사용하여 검색어 개선
+        improved_queries = improve_search_query(topic, search_type, language)
+        st.info(f"개선된 검색어: {', '.join(improved_queries)}")
 
         documents = []
 
-        # 최대 3개의 가장 관련성 높은 페이지 처리
-        for i, page_title in enumerate(search_results[:3]):
-            try:
-                # 페이지 정보 가져오기
-                page = wikipedia.page(page_title, auto_suggest=False)
+        # 각 개선된 검색어에 대해 검색 수행
+        for query in improved_queries:
+            # 검색 결과 가져오기
+            search_results = wikipedia.search(query, results=3)
 
-                # 요약 추가
-                if page.summary:
-                    documents.append(
-                        Document(
-                            page_content=page.summary,
-                            metadata={
-                                "source": f"wikipedia-{language}",
-                                "section": "summary",
-                                "topic": page_title,
-                            },
-                        )
-                    )
-
-                # 본문 섹션 추가 (일부만)
-                content = page.content
-                if content:
-                    # 본문을 적당한 길이로 잘라서 추가
-                    max_length = 5000  # 최대 길이 제한
-                    if len(content) > max_length:
-                        content = content[:max_length]
-
-                    documents.append(
-                        Document(
-                            page_content=content,
-                            metadata={
-                                "source": f"wikipedia-{language}",
-                                "section": "content",
-                                "topic": page_title,
-                            },
-                        )
-                    )
-            except (
-                wikipedia.exceptions.DisambiguationError,
-                wikipedia.exceptions.PageError,
-            ) as e:
-                # 단일 페이지를 가져오는 데 실패해도 계속 진행
-                st.warning(f"{page_title} 페이지 처리 중 오류 발생: {str(e)}")
+            if not search_results:
                 continue
+
+            # 최대 2개의 관련성 높은 페이지만 처리 (쿼리당)
+            for page_title in search_results[:2]:
+                try:
+                    # 페이지 정보 가져오기
+                    page = wikipedia.page(page_title, auto_suggest=False)
+
+                    # 이미 수집한 페이지인지 확인
+                    if any(
+                        doc.metadata.get("topic") == page_title for doc in documents
+                    ):
+                        continue
+
+                    # 요약 추가
+                    if page.summary:
+                        documents.append(
+                            Document(
+                                page_content=page.summary,
+                                metadata={
+                                    "source": f"wikipedia-{language}",
+                                    "section": "summary",
+                                    "topic": page_title,
+                                    "query": query,
+                                },
+                            )
+                        )
+
+                    # 본문 섹션 추가 (일부만)
+                    content = page.content
+                    if content:
+                        # 본문을 적당한 길이로 자르기
+                        max_length = 5000
+                        if len(content) > max_length:
+                            content = content[:max_length]
+
+                        documents.append(
+                            Document(
+                                page_content=content,
+                                metadata={
+                                    "source": f"wikipedia-{language}",
+                                    "section": "content",
+                                    "topic": page_title,
+                                    "query": query,
+                                },
+                            )
+                        )
+                except (
+                    wikipedia.exceptions.DisambiguationError,
+                    wikipedia.exceptions.PageError,
+                ) as e:
+                    continue
 
         if documents:
             st.success(f"{language} 언어로 {len(documents)}개의 문서를 찾았습니다.")
@@ -119,21 +172,17 @@ def get_wikipedia_content(topic, language="en"):
 
 
 # Vector Store 생성 함수
-# TODO: cache
 @st.cache_resource
 def create_vector_store(topic):
     documents = []
 
     # 영어 위키피디아 데이터 수집
     wiki_docs_en = get_wikipedia_content(topic, "en")
-    # TODO: wiki_docs_en가 None이 아니면 documents에 추가
     if wiki_docs_en:
         documents.extend(wiki_docs_en)
-    
 
     # 한국어 위키피디아 데이터 수집
     wiki_docs_ko = get_wikipedia_content(topic, "ko")
-    # TODO: wiki_docs_en가 None이 아니면 documents에 추가
     if wiki_docs_ko:
         documents.extend(wiki_docs_ko)
 
@@ -166,7 +215,7 @@ def retrieve_relevant_info(query, vector_store, k=3):
         return "", []
 
     try:
-        # TODO: 질의에 관련된 문서 검색
+        # 질의에 관련된 문서 검색
         retrieved_docs = vector_store.similarity_search(query, k=k)
 
         # 검색 결과 텍스트 형식으로 변환
@@ -199,7 +248,7 @@ class DebateStatus(Enum):
     COMPLETED = auto()
 
 
-# LangGraph 상태 정의 - RAG 관련 필드 추가
+# LangGraph 상태 정의 - RAG 관련 필드 추가 및 명확화
 class DebateState(TypedDict):
     topic: str
     messages: List[Dict]
@@ -209,9 +258,93 @@ class DebateState(TypedDict):
     debate_status: DebateStatus
     vector_store: object  # RAG 벡터 스토어
     retrieved_docs: Dict[str, List]  # RAG 검색 결과
+    current_query: str  # 현재 검색 쿼리
+    current_context: str  # 검색된 컨텍스트
 
 
-# 찬성 측 에이전트 노드 - RAG 활용
+# 공통 검색 함수를 추가하여 중복 코드 제거
+def retrieve_info_for_role(
+    state: DebateState, search_type: str, perspective: str
+) -> DebateState:
+    """
+    역할에 따른 정보 검색을 수행하는 공통 함수
+
+    Args:
+        state: 현재 토론 상태
+        search_type: 검색 유형 ("pro", "con", "judge")
+        perspective: 검색 관점 설명 ("찬성 측 관점", "반대 측 관점", "평가 기준 객관적 사실" 등)
+
+    Returns:
+        업데이트된 토론 상태
+    """
+    # 기본 검색 쿼리 설정
+    base_query = f"{state['topic']} {perspective}"
+
+    # 검색 유형별 추가 컨텍스트
+    if search_type == "pro" and state["current_round"] > 1:
+        # 이전 반대 측 주장이 있으면 참고
+        prev_con_arguments = [m for m in state["messages"] if m["role"] == "반대 측"]
+        if prev_con_arguments:
+            last_con = prev_con_arguments[-1]["content"]
+            base_query += f" {last_con}에 대한 반박"
+
+    elif search_type == "con" and state["messages"]:
+        # 가장 최근 찬성 측 주장 참고
+        pro_arguments = [e for e in state["messages"] if e["role"] == "찬성 측"]
+        if pro_arguments:
+            last_pro = pro_arguments[-1]["content"]
+            base_query += f" {last_pro}에 대한 반박"
+
+    # 검색 실행
+    context, docs = "", []
+    if state["vector_store"]:
+        # 검색 유형에 따라 k 값 조정
+        k = 2 if search_type == "judge" else 3
+        context, docs = retrieve_relevant_info(base_query, state["vector_store"], k=k)
+
+    # 상태 업데이트
+    new_state = state.copy()
+    new_state["current_query"] = base_query
+    new_state["current_context"] = context
+
+    # 검색된 문서 저장
+    if "retrieved_docs" not in new_state:
+        new_state["retrieved_docs"] = {"pro": [], "con": []}
+
+    # 검색 유형에 따라 저장 위치 결정
+    if search_type in ["pro", "con"]:
+        new_state["retrieved_docs"][search_type] = new_state["retrieved_docs"].get(
+            search_type, []
+        ) + ([doc.page_content for doc in docs] if docs else [])
+
+    return new_state
+
+
+# 찬성 측을 위한 검색 노드 - 공통 함수 활용
+def retrieve_pro_info(state: DebateState) -> DebateState:
+    """찬성 측 정보 검색 노드"""
+    return retrieve_info_for_role(
+        state, search_type="pro", perspective="찬성 장점 이유 근거"
+    )
+
+
+# 반대 측을 위한 검색 노드 - 공통 함수 활용
+def retrieve_con_info(state: DebateState) -> DebateState:
+    """반대 측 정보 검색 노드"""
+    return retrieve_info_for_role(
+        state, search_type="con", perspective="반대 단점 문제점 근거"
+    )
+
+
+# 심판을 위한 검색 노드 - 공통 함수 활용
+def retrieve_judge_info(state: DebateState) -> DebateState:
+    """심판 정보 검색 노드"""
+    return retrieve_info_for_role(
+        state, search_type="judge", perspective="평가 기준 객관적 사실"
+    )
+
+
+# 찬성 측 에이전트 노드 - RAG 제거 및 컨텍스트 사용
 def pro_agent(state: DebateState) -> DebateState:
     """찬성 측 에이전트 함수"""
     # 시스템 프롬프트 설정
@@ -227,20 +360,8 @@ def pro_agent(state: DebateState) -> DebateState:
         else:
             messages.append(HumanMessage(content=f"{msg['role']}: {msg['content']}"))
 
-    # RAG: 관련 정보 검색
-    query = f"{state['topic']} 찬성 장점 이유 근거"
-    if state["current_round"] > 1 and state["messages"]:
-        # 이전 반대 측 주장이 있으면 참고
-        prev_con_arguments = [m for m in state["messages"] if m["role"] == "반대 측"]
-        if prev_con_arguments:
-            last_con = prev_con_arguments[-1]["content"]
-            query += f" {last_con}에 대한 반박"
-
-    context, docs = "", []
-    # if "vector_store" in state and state["vector_store"]:
-    vector_store = state.get("vector_store")
-    if vector_store:
-        context, docs = retrieve_relevant_info(query, state["vector_store"])
+    # 검색된 컨텍스트 사용
+    context = state.get("current_context", "")
 
     # 프롬프트 구성
     if state["current_round"] == 1:
@@ -282,20 +403,10 @@ def pro_agent(state: DebateState) -> DebateState:
     new_state["messages"].append({"role": "찬성 측", "content": response.content})
     new_state["current_speaker"] = SpeakerRole.CON
 
-    # 검색된 문서 저장
-    if "retrieved_docs" not in new_state:
-        new_state["retrieved_docs"] = {"pro": [], "con": []}
-    else:
-        new_state["retrieved_docs"] = {
-            "pro": state["retrieved_docs"].get("pro", [])
-            + ([doc.page_content for doc in docs] if docs else []),
-            "con": state["retrieved_docs"].get("con", []),
-        }
-
     return new_state
 
 
-# 반대 측 에이전트 노드 - RAG 활용
+# 반대 측 에이전트 노드 - RAG 제거 및 컨텍스트 사용
 def con_agent(state: DebateState) -> DebateState:
     """반대 측 에이전트 함수"""
     # 시스템 프롬프트 설정
@@ -311,18 +422,8 @@ def con_agent(state: DebateState) -> DebateState:
         else:
             messages.append(HumanMessage(content=f"{msg['role']}: {msg['content']}"))
 
-    # RAG: 관련 정보 검색
-    query = f"{state['topic']} 반대 단점 문제점 근거"
-    if state["messages"]:
-        # 가장 최근 찬성 측 주장 참고
-        pro_arguments = [e for e in state["messages"] if e["role"] == "찬성 측"]
-        if pro_arguments:
-            last_pro = pro_arguments[-1]["content"]
-            query += f" {last_pro}에 대한 반박"
-
-    context, docs = "", []
-    if "vector_store" in state and state["vector_store"]:
-        context, docs = retrieve_relevant_info(query, state["vector_store"])
+    # 검색된 컨텍스트 사용
+    context = state.get("current_context", "")
 
     # 프롬프트 구성
     # 찬성 측 마지막 메시지를 가져옴
@@ -351,16 +452,6 @@ def con_agent(state: DebateState) -> DebateState:
     new_state["messages"].append({"role": "반대 측", "content": response.content})
     new_state["current_round"] += 1
 
-    # 검색된 문서 저장
-    if "retrieved_docs" not in new_state:
-        new_state["retrieved_docs"] = {"pro": [], "con": []}
-    else:
-        new_state["retrieved_docs"] = {
-            "pro": state["retrieved_docs"].get("pro", []),
-            "con": state["retrieved_docs"].get("con", [])
-            + ([doc.page_content for doc in docs] if docs else []),
-        }
-
     # 다음 라운드 여부 결정
     if new_state["current_round"] <= new_state["max_rounds"]:
         new_state["current_speaker"] = SpeakerRole.PRO
@@ -370,7 +461,7 @@ def con_agent(state: DebateState) -> DebateState:
     return new_state
 
 
-# 심판 에이전트 노드 - RAG 활용
+# 심판 에이전트 노드 - RAG 제거 및 컨텍스트 사용
 def judge_agent(state: DebateState) -> DebateState:
     """심판 에이전트 함수"""
     # 시스템 프롬프트 설정
@@ -379,11 +470,8 @@ def judge_agent(state: DebateState) -> DebateState:
     # 메시지 준비
     messages = [SystemMessage(content=system_prompt)]
 
-    # RAG: 객관적인 평가를 위한 정보 검색
-    query = f"{state['topic']} 평가 기준 객관적 사실"
-    context, _ = "", []
-    if "vector_store" in state and state["vector_store"]:
-        context, _ = retrieve_relevant_info(query, state["vector_store"], k=2)
+    # 검색된 컨텍스트 사용
+    context = state.get("current_context", "")
 
     # 프롬프트 구성
     prompt = f"""
@@ -420,51 +508,105 @@ def judge_agent(state: DebateState) -> DebateState:
     return new_state
 
 
-# 라우터 함수: 다음 노드 결정
-def router(state: DebateState) -> Literal["pro_agent", "con_agent", "judge", "END"]:
+# 라우터 함수 업데이트: 검색 노드와 에이전트 노드 간의 라우팅
+def router(
+    state: DebateState,
+) -> Literal[
+    "retrieve_pro_info",
+    "pro_agent",
+    "retrieve_con_info",
+    "con_agent",
+    "retrieve_judge_info",
+    "judge",
+    "END",
+]:
     if state["debate_status"] == DebateStatus.COMPLETED:
         return "END"
-    return state["current_speaker"].value
+
+    current_speaker = state["current_speaker"]
+
+    # 현재 화자에 따라 검색 노드로 먼저 라우팅
+    if current_speaker == SpeakerRole.PRO:
+        return "retrieve_pro_info"
+    elif current_speaker == SpeakerRole.CON:
+        return "retrieve_con_info"
+    elif current_speaker == SpeakerRole.JUDGE:
+        return "retrieve_judge_info"
+    elif current_speaker == SpeakerRole.COMPLETED:
+        return "END"
 
 
-# LangGraph 워크플로우 정의
+# Pro 검색 후 에이전트로 라우팅
+def pro_router(state: DebateState) -> Literal["pro_agent"]:
+    return "pro_agent"
+
+
+# Con 검색 후 에이전트로 라우팅
+def con_router(state: DebateState) -> Literal["con_agent"]:
+    return "con_agent"
+
+
+# Judge 검색 후 에이전트로 라우팅
+def judge_router(state: DebateState) -> Literal["judge"]:
+    return "judge"
+
+
+# LangGraph 워크플로우 정의 - 서브그래프 활용
 def create_debate_graph() -> StateGraph:
-    # 그래프 생성
+    # 메인 그래프 생성
     workflow = StateGraph(DebateState)
 
-    # 노드 추가
-    workflow.add_node(SpeakerRole.PRO.value, pro_agent)
-    workflow.add_node(SpeakerRole.CON.value, con_agent)
-    workflow.add_node(SpeakerRole.JUDGE.value, judge_agent)
+    # 검색 노드 추가
+    workflow.add_node("retrieve_pro_info", retrieve_pro_info)
+    workflow.add_node("retrieve_con_info", retrieve_con_info)
+    workflow.add_node("retrieve_judge_info", retrieve_judge_info)
 
-    routing_map = {
-        SpeakerRole.PRO.value: SpeakerRole.PRO.value,
-        SpeakerRole.CON.value: SpeakerRole.CON.value,
-        SpeakerRole.JUDGE.value: SpeakerRole.JUDGE.value,
-        "END": END,
-    }
+    # 에이전트 노드 추가
+    workflow.add_node("pro_agent", pro_agent)
+    workflow.add_node("con_agent", con_agent)
+    workflow.add_node("judge", judge_agent)
 
-    # 엣지 정의
+    # 라우팅 엣지 추가
+    workflow.set_entry_point("retrieve_pro_info")
+
+    # 검색 노드에서 에이전트 노드로 라우팅
+    workflow.add_edge("retrieve_pro_info", "pro_agent")
+    workflow.add_edge("retrieve_con_info", "con_agent")
+    workflow.add_edge("retrieve_judge_info", "judge")
+
+    # 에이전트 노드 이후 라우팅
     workflow.add_conditional_edges(
-        SpeakerRole.PRO.value,
+        "pro_agent",
         router,
-        routing_map,
+        {
+            "retrieve_pro_info": "retrieve_pro_info",
+            "retrieve_con_info": "retrieve_con_info",
+            "retrieve_judge_info": "retrieve_judge_info",
+            "END": END,
+        },
     )
 
     workflow.add_conditional_edges(
-        SpeakerRole.CON.value,
+        "con_agent",
         router,
-        routing_map,
+        {
+            "retrieve_pro_info": "retrieve_pro_info",
+            "retrieve_con_info": "retrieve_con_info",
+            "retrieve_judge_info": "retrieve_judge_info",
+            "END": END,
+        },
     )
 
     workflow.add_conditional_edges(
-        SpeakerRole.JUDGE.value,
+        "judge",
         router,
-        routing_map,
+        {
+            "retrieve_pro_info": "retrieve_pro_info",
+            "retrieve_con_info": "retrieve_con_info",
+            "retrieve_judge_info": "retrieve_judge_info",
+            "END": END,
+        },
     )
-
-    # 시작 노드 설정
-    workflow.set_entry_point(SpeakerRole.PRO.value)
 
     # 그래프 컴파일
     return workflow.compile()
@@ -517,7 +659,7 @@ if not st.session_state.debate_active and st.button("토론 시작"):
     # 그래프 생성
     debate_graph = create_debate_graph()
 
-    # 초기 상태 설정
+    # 초기 상태 설정 업데이트
     initial_state: DebateState = {
         "topic": debate_topic,
         "messages": [],
@@ -527,6 +669,8 @@ if not st.session_state.debate_active and st.button("토론 시작"):
         "debate_status": DebateStatus.ACTIVE,
         "vector_store": st.session_state.vector_store,
         "retrieved_docs": {"pro": [], "con": []},
+        "current_query": "",
+        "current_context": "",
     }
 
     # 토론 시작
